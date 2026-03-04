@@ -1,5 +1,6 @@
 import { MetricsQueue } from "./queue"
 import { MetricsConfig } from "./config"
+import { MetricsTransformer } from "./transformer"
 import { Log } from "@/util/log"
 import type { MetricsAggregator } from "./aggregator"
 
@@ -8,13 +9,84 @@ export namespace MetricsUploader {
 
     const CATEGORIES = ["session", "message", "tool", "step"] as const
     const API_PATHS: Record<string, string> = {
-        session: "/api/v1/sessions/report",
-        message: "/api/v1/messages/report",
-        tool: "/api/v1/tools/report",
-        step: "/api/v1/messages/report",
+        session: "/api/v1/metrics/report",    // unified event endpoint
+        message: "/api/v1/metrics/report",    // unified event endpoint
+        tool: "/api/v1/metrics/report",    // unified event endpoint
+        step: "/api/v1/metrics/report",    // unified event endpoint
+        aggregated: "/api/data-entry/batch",     // reuse existing batch data entry
+        heartbeat: "/api/v1/heartbeat",         // new heartbeat endpoint
     }
 
     let uploadTimer: ReturnType<typeof setInterval> | null = null
+
+    // ── JWT Token Management ──────────────────────────────────────────
+
+    let cachedToken: string | null = null
+    let tokenExpireAt: number = 0
+
+    /**
+     * Get a valid JWT token. Priority:
+     * 1. Directly configured token (auth_token)
+     * 2. Cached token if not expired
+     * 3. Login with username/password to obtain new token
+     */
+    async function getAuthToken(): Promise<string> {
+        // 1. Use directly configured token
+        const configToken = MetricsConfig.getAuthToken()
+        if (configToken) return configToken
+
+        // 2. Use cached token if still valid (refresh 1h before expiry)
+        if (cachedToken && Date.now() < tokenExpireAt - 3600_000) {
+            return cachedToken
+        }
+
+        // 3. Login with username/password
+        const username = MetricsConfig.getAuthUsername()
+        const password = MetricsConfig.getAuthPassword()
+        if (!username || !password) {
+            throw new Error("metrics auth: username/password not configured")
+        }
+
+        const baseUrl = MetricsConfig.getApiBaseUrl()
+        const resp = await fetch(`${baseUrl}/api/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+            signal: AbortSignal.timeout(10_000),
+        })
+
+        if (!resp.ok) {
+            throw new Error(`metrics auth failed: ${resp.status} ${resp.statusText}`)
+        }
+
+        const body = await resp.json()
+        cachedToken = body.data.token
+        // Default 24h expiry
+        tokenExpireAt = Date.now() + (body.data.expiresIn || 86400) * 1000
+        log.info("obtained JWT token", { expiresIn: body.data.expiresIn })
+        return cachedToken!
+    }
+
+    /**
+     * Fetch with JWT Bearer token injected.
+     */
+    async function authenticatedFetch(url: string, options: RequestInit): Promise<Response> {
+        const token = await getAuthToken()
+        const headers = {
+            ...(options.headers as Record<string, string>),
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+        }
+        return fetch(url, { ...options, headers })
+    }
+
+    // ── For testing: reset cached token ────────────────────────────────
+    export function resetAuthState() {
+        cachedToken = null
+        tokenExpireAt = 0
+    }
+
+    // ── Client Info ────────────────────────────────────────────────────
 
     /**
      * Build the client info header for upload payloads.
@@ -26,6 +98,8 @@ export namespace MetricsUploader {
             machine_id: MetricsConfig.getMachineId(),
         }
     }
+
+    // ── Timer Management ───────────────────────────────────────────────
 
     /**
      * Start periodic upload timer.
@@ -48,6 +122,8 @@ export namespace MetricsUploader {
         }
     }
 
+    // ── Upload Logic ───────────────────────────────────────────────────
+
     /**
      * Upload all pending data across all categories.
      */
@@ -58,7 +134,7 @@ export namespace MetricsUploader {
     }
 
     /**
-     * Upload a single category's data.
+     * Upload a single category's data as a batch of events.
      */
     export async function uploadCategory(category: string): Promise<void> {
         const records = await MetricsQueue.dequeue(category)
@@ -69,11 +145,17 @@ export namespace MetricsUploader {
         // Split into batches if needed
         for (let i = 0; i < records.length; i += batchSize) {
             const batch = records.slice(i, i + batchSize)
-            const apiPath = API_PATHS[category] ?? "/api/v1/metrics/batch"
+            const apiPath = API_PATHS[category] ?? "/api/v1/metrics/report"
+
+            // Wrap events with client envelope
             const payload = {
                 ...getClientInfo(),
-                timestamp: Date.now(),
-                events: batch,
+                events: batch.map((record) => ({
+                    event_type: record.event_type ?? category,
+                    event_action: record.event_action,
+                    timestamp: record.timestamp ?? Date.now(),
+                    data: record.data ?? record,
+                })),
             }
 
             try {
@@ -89,22 +171,44 @@ export namespace MetricsUploader {
     }
 
     /**
-     * Upload aggregated metrics to the batch endpoint.
+     * Upload aggregated metrics to the platform's batch data entry endpoint.
+     * Uses MetricsTransformer to convert from AggregatedMetrics to platform format.
      */
     export async function uploadAggregated(
-        metrics: MetricsAggregator.AggregatedMetrics,
+        aggregated: MetricsAggregator.AggregatedMetrics,
     ): Promise<void> {
-        const payload = {
-            ...getClientInfo(),
-            timestamp: Date.now(),
-            ...metrics,
-        }
+        // 1. Transform to platform format
+        const entries = MetricsTransformer.transformAggregated(
+            aggregated.metrics,
+            aggregated.period.start,
+            aggregated.period.end,
+        )
 
+        if (entries.length === 0) return
+
+        // 2. Upload via platform batch data entry endpoint
         try {
-            await httpPost("/api/v1/metrics/batch", payload)
-            log.info("uploaded aggregated metrics")
+            const baseUrl = MetricsConfig.getApiBaseUrl()
+            const resp = await authenticatedFetch(`${baseUrl}${API_PATHS.aggregated}`, {
+                method: "POST",
+                body: JSON.stringify({ data: entries }),
+            })
+
+            if (resp.ok) {
+                log.info("aggregated metrics uploaded", { count: entries.length })
+            } else if (resp.status === 400) {
+                // Possible duplicate data
+                const body = await resp.json()
+                log.warn("batch upload had conflicts", { message: body.message })
+            } else {
+                throw new Error(`upload failed: ${resp.status}`)
+            }
         } catch (e) {
-            log.warn("aggregated metrics upload failed", { error: e })
+            log.error("aggregated upload failed, requeueing", { error: e })
+            await MetricsQueue.enqueue("aggregated_pending", {
+                entries,
+                timestamp: Date.now(),
+            })
         }
     }
 
@@ -120,14 +224,14 @@ export namespace MetricsUploader {
         }
 
         try {
-            await httpPost("/api/v1/heartbeat", payload)
+            await httpPost(API_PATHS.heartbeat, payload)
         } catch (e) {
             log.warn("heartbeat failed", { error: e })
         }
     }
 
     /**
-     * HTTP POST with retry logic.
+     * HTTP POST with retry logic and JWT authentication.
      */
     async function httpPost(urlPath: string, body: any): Promise<void> {
         const baseUrl = MetricsConfig.getApiBaseUrl()
@@ -136,14 +240,9 @@ export namespace MetricsUploader {
 
         for (let attempt = 0; attempt < maxRetries; attempt++) {
             try {
-                const response = await fetch(url, {
+                const response = await authenticatedFetch(url, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-Client-ID": body.client_id ?? "",
-                    },
                     body: JSON.stringify(body),
-                    signal: AbortSignal.timeout(10_000),
                 })
 
                 if (response.ok) return

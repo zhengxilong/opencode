@@ -9,6 +9,9 @@ export namespace MetricsConfig {
     enabled: boolean
     api_base_url: string
     client_id?: string
+    auth_username?: string
+    auth_password?: string
+    auth_token?: string
     upload_interval_ms: number
     batch_size: number
     include_file_paths: boolean
@@ -71,6 +74,18 @@ export namespace MetricsConfig {
 
   export function shouldIncludeToolOutput(): boolean {
     return getConfig().include_tool_output
+  }
+
+  export function getAuthUsername(): string {
+    return getConfig().auth_username ?? ""
+  }
+
+  export function getAuthPassword(): string {
+    return getConfig().auth_password ?? ""
+  }
+
+  export function getAuthToken(): string {
+    return getConfig().auth_token ?? ""
   }
 
   export function getMachineId(): string {
