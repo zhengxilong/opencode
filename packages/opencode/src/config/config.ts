@@ -1167,6 +1167,21 @@ export namespace Config {
             .describe("Timeout in milliseconds for model context protocol (MCP) requests"),
         })
         .optional(),
+      metrics: z
+        .object({
+          enabled: z.boolean().optional().describe("Enable metrics collection and upload to management platform"),
+          api_base_url: z.string().optional().describe("Management platform API base URL"),
+          client_id: z.string().optional().describe("Client identifier for tracking"),
+          auth_username: z.string().optional().describe("Username for management platform authentication"),
+          auth_password: z.string().optional().describe("Password for management platform authentication"),
+          auth_token: z.string().optional().describe("Direct JWT token for authentication (alternative to username/password)"),
+          upload_interval_ms: z.number().int().positive().optional().describe("Upload interval in milliseconds (default: 300000)"),
+          batch_size: z.number().int().positive().optional().describe("Batch size for uploads (default: 100)"),
+          include_file_paths: z.boolean().optional().describe("Include file paths in uploaded data"),
+          include_tool_output: z.boolean().optional().describe("Include tool output in uploaded data"),
+        })
+        .optional()
+        .describe("Metrics collection and upload configuration"),
     })
     .strict()
     .meta({

@@ -143,8 +143,13 @@ export namespace MetricsUploader {
 
     /**
      * Upload all pending data across all categories.
+     * Also uploads aggregated metrics before clearing the queue.
      */
     export async function uploadAll(): Promise<void> {
+        // First, aggregate and upload metrics before clearing the queue
+        await aggregateAndUpload()
+
+        // Then upload raw events and clear the queue
         for (const category of CATEGORIES) {
             await uploadCategory(category)
         }
@@ -250,9 +255,9 @@ export namespace MetricsUploader {
     /**
      * Aggregate and upload metrics if there is pending data.
      * This method reads queued data, aggregates it, and uploads to the platform.
-     * Called periodically by the aggregation timer.
+     * Called by uploadAll before clearing the queue, and also by the aggregation timer.
      */
-    async function uploadAggregatedMetrics(): Promise<void> {
+    export async function aggregateAndUpload(): Promise<void> {
         try {
             // Read all pending data counts from queue
             const sessions = await MetricsQueue.pendingCount("session")
@@ -306,6 +311,15 @@ export namespace MetricsUploader {
         } catch (e) {
             log.warn("aggregated metrics upload failed", { error: e })
         }
+    }
+
+    /**
+     * Aggregate and upload metrics if there is pending data.
+     * Called periodically by the aggregation timer.
+     */
+    async function uploadAggregatedMetrics(): Promise<void> {
+        // Just call the exported function
+        await aggregateAndUpload()
     }
 
     /**

@@ -27,6 +27,9 @@ import { SkillTool } from "../../tool/skill"
 import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "../../util/locale"
+import { MetricsIntegration } from "@/metrics/integration"
+import { Config } from "@/config/config"
+import { Log } from "@/util/log"
 
 type ToolProps<T extends Tool.Info> = {
   input: Tool.InferParameters<T>
@@ -297,8 +300,51 @@ export const RunCommand = cmd({
         describe: "show thinking blocks",
         default: false,
       })
+      .option("metrics-force", {
+        type: "boolean",
+        describe: "Force enable metrics collection (ignore config)",
+        default: false,
+      })
+      .option("metrics-silent", {
+        type: "boolean",
+        describe: "Silent mode for metrics (no logs)",
+        default: false,
+      })
+      .option("metrics-status", {
+        type: "boolean",
+        describe: "Show metrics collection status",
+        default: false,
+      })
   },
   handler: async (args) => {
+    // Show metrics status if requested
+    if (args["metrics-status"]) {
+      const status = MetricsIntegration.getStatus()
+      console.log(JSON.stringify(status, null, 2))
+      process.exit(0)
+    }
+
+    // Register exit handler (outside bootstrap)
+    const originalExit = process.exit
+    process.exit = async (code?: number) => {
+      await MetricsIntegration.shutdown()
+      originalExit(code)
+    }
+
+    process.on("beforeExit", async () => {
+      await MetricsIntegration.shutdown()
+    })
+
+    process.on("SIGINT", async () => {
+      await MetricsIntegration.shutdown()
+      process.exit(0)
+    })
+
+    process.on("SIGTERM", async () => {
+      await MetricsIntegration.shutdown()
+      process.exit(0)
+    })
+
     let message = [...args.message, ...(args["--"] || [])]
       .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
       .join(" ")
@@ -614,6 +660,24 @@ export const RunCommand = cmd({
     }
 
     await bootstrap(process.cwd(), async () => {
+      // Initialize metrics collection after bootstrap
+      const log = Log.create({ service: "cli.run" })
+      const configState = await Config.state()
+      const config = configState.config
+      const metricsResult = await MetricsIntegration.init({
+        config,
+        force: args["metrics-force"] as boolean,
+        silent: args["metrics-silent"] as boolean,
+      })
+
+      if (metricsResult.success && metricsResult.enabled) {
+        log.info("metrics collection enabled", metricsResult.config)
+      } else if (metricsResult.error) {
+        log.warn("metrics initialization failed", {
+          error: metricsResult.error
+        })
+      }
+
       const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
         return Server.App().fetch(request)
