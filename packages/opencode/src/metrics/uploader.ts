@@ -1,8 +1,8 @@
 import { MetricsQueue } from "./queue"
 import { MetricsConfig } from "./config"
 import { MetricsTransformer } from "./transformer"
+import { MetricsAggregator } from "./aggregator"
 import { Log } from "@/util/log"
-import type { MetricsAggregator } from "./aggregator"
 
 export namespace MetricsUploader {
     const log = Log.create({ service: "metrics.uploader" })
@@ -18,6 +18,7 @@ export namespace MetricsUploader {
     }
 
     let uploadTimer: ReturnType<typeof setInterval> | null = null
+    let aggregationTimer: ReturnType<typeof setInterval> | null = null
 
     // ── JWT Token Management ──────────────────────────────────────────
 
@@ -110,6 +111,18 @@ export namespace MetricsUploader {
         uploadTimer = setInterval(() => {
             uploadAll().catch((e) => log.error("periodic upload failed", { error: e }))
         }, interval)
+
+        // Start aggregation timer (every 5 minutes)
+        const aggregationInterval = 5 * 60 * 1000 // 5 minutes
+        if (aggregationTimer) clearInterval(aggregationTimer)
+        aggregationTimer = setInterval(() => {
+            uploadAggregatedMetrics().catch((e) => log.error("aggregation upload failed", { error: e }))
+        }, aggregationInterval)
+
+        log.info("started upload timers", {
+            eventUploadInterval: interval,
+            aggregationInterval: aggregationInterval
+        })
     }
 
     /**
@@ -119,6 +132,10 @@ export namespace MetricsUploader {
         if (uploadTimer) {
             clearInterval(uploadTimer)
             uploadTimer = null
+        }
+        if (aggregationTimer) {
+            clearInterval(aggregationTimer)
+            aggregationTimer = null
         }
     }
 
@@ -227,6 +244,67 @@ export namespace MetricsUploader {
             await httpPost(API_PATHS.heartbeat, payload)
         } catch (e) {
             log.warn("heartbeat failed", { error: e })
+        }
+    }
+
+    /**
+     * Aggregate and upload metrics if there is pending data.
+     * This method reads queued data, aggregates it, and uploads to the platform.
+     * Called periodically by the aggregation timer.
+     */
+    async function uploadAggregatedMetrics(): Promise<void> {
+        try {
+            // Read all pending data counts from queue
+            const sessions = await MetricsQueue.pendingCount("session")
+            const messages = await MetricsQueue.pendingCount("message")
+            const tools = await MetricsQueue.pendingCount("tool")
+            const steps = await MetricsQueue.pendingCount("step")
+
+            // If no pending data, skip aggregation
+            if (sessions === 0 && messages === 0 && tools === 0 && steps === 0) {
+                return
+            }
+
+            log.info("aggregating metrics for upload", {
+                sessions,
+                messages,
+                tools,
+                steps
+            })
+
+            // Read data from queue (without dequeuing)
+            const sessionRecords = await MetricsQueue.readWithoutDequeue("session")
+            const messageRecords = await MetricsQueue.readWithoutDequeue("message")
+            const toolRecords = await MetricsQueue.readWithoutDequeue("tool")
+            const stepRecords = await MetricsQueue.readWithoutDequeue("step")
+
+            // Aggregate data for the last 24 hours
+            const periodEnd = Date.now()
+            const periodStart = periodEnd - 24 * 60 * 60 * 1000 // Last 24 hours
+
+            const aggregated = MetricsAggregator.computeFromRecords({
+                sessionRecords,
+                messageRecords,
+                toolRecords,
+                stepRecords,
+                periodStart,
+                periodEnd,
+            })
+
+            if (aggregated) {
+                await uploadAggregated(aggregated)
+                log.info("aggregated metrics upload completed", {
+                    periodStart: new Date(periodStart).toISOString(),
+                    periodEnd: new Date(periodEnd).toISOString(),
+                    entriesCount: MetricsTransformer.transformAggregated(
+                        aggregated.metrics,
+                        periodStart,
+                        periodEnd
+                    ).length
+                })
+            }
+        } catch (e) {
+            log.warn("aggregated metrics upload failed", { error: e })
         }
     }
 

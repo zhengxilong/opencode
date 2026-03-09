@@ -106,6 +106,52 @@ export namespace MetricsQueue {
     }
 
     /**
+     * Get pending record count for a specific category.
+     */
+    export async function pendingCount(category: string): Promise<number> {
+        const dir = queueDir()
+        const files = await findQueueFiles(dir, category)
+        let count = 0
+
+        for (const file of files) {
+            try {
+                const content = await fs.readFile(file, "utf-8")
+                count += content.trim().split("\n").filter(Boolean).length
+            } catch {
+                // skip files we can't read
+            }
+        }
+        return count
+    }
+
+    /**
+     * Read all records for a given category without dequeuing.
+     * Used for aggregation purposes where we need to see all pending data.
+     */
+    export async function readWithoutDequeue(category: string): Promise<any[]> {
+        const dir = queueDir()
+        const files = await findQueueFiles(dir, category)
+        const records: any[] = []
+
+        for (const file of files) {
+            try {
+                const content = await fs.readFile(file, "utf-8")
+                const lines = content.trim().split("\n").filter(Boolean)
+                for (const line of lines) {
+                    try {
+                        records.push(JSON.parse(line))
+                    } catch {
+                        log.warn("invalid queue record", { file, line: line.substring(0, 100) })
+                    }
+                }
+            } catch (e) {
+                log.error("failed to read queue file", { file, error: e })
+            }
+        }
+        return records
+    }
+
+    /**
      * Clear all queue files.
      */
     export async function clear(): Promise<void> {
