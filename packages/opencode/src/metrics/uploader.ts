@@ -146,12 +146,112 @@ export namespace MetricsUploader {
      * Also uploads aggregated metrics before clearing the queue.
      */
     export async function uploadAll(): Promise<void> {
-        // First, aggregate and upload metrics before clearing the queue
-        await aggregateAndUpload()
+        // Read all pending data from queue before clearing
+        const allData: Record<string, any[]> = {}
+        for (const category of CATEGORIES) {
+            allData[category] = await MetricsQueue.readWithoutDequeue(category)
+        }
+
+        // Check if there's any data to process
+        const hasData = Object.values(allData).some(records => records.length > 0)
+        if (!hasData) return
+
+        // Aggregate and upload metrics using the data in memory
+        await aggregateFromData(allData)
 
         // Then upload raw events and clear the queue
         for (const category of CATEGORIES) {
-            await uploadCategory(category)
+            const records = allData[category]
+            if (records.length === 0) continue
+
+            const batchSize = MetricsConfig.getBatchSize()
+            const apiPath = API_PATHS[category] ?? "/api/v1/metrics/report"
+
+            // Split into batches if needed
+            for (let i = 0; i < records.length; i += batchSize) {
+                const batch = records.slice(i, i + batchSize)
+
+                // Wrap events with client envelope
+                const payload = {
+                    ...getClientInfo(),
+                    events: batch.map((record) => ({
+                        event_type: record.event_type ?? category,
+                        event_action: record.event_action,
+                        timestamp: record.timestamp ?? Date.now(),
+                        data: record.data ?? record,
+                    })),
+                }
+
+                try {
+                    await httpPost(apiPath, payload)
+                    log.info(`uploaded ${batch.length} ${category} records`)
+                } catch (e) {
+                    log.warn(`upload failed for ${category}, requeueing ${batch.length} records`, {
+                        error: e,
+                    })
+                    await MetricsQueue.requeue(category, batch)
+                }
+            }
+
+            // Clear the queue after successful upload
+            await MetricsQueue.dequeue(category)
+        }
+    }
+
+    /**
+     * Aggregate metrics from in-memory data and upload.
+     */
+    async function aggregateFromData(allData: Record<string, any[]>): Promise<void> {
+        try {
+            const sessionRecords = allData["session"] || []
+            const messageRecords = allData["message"] || []
+            const toolRecords = allData["tool"] || []
+            const stepRecords = allData["step"] || []
+
+            // If no data, skip aggregation
+            if (
+                sessionRecords.length === 0 &&
+                messageRecords.length === 0 &&
+                toolRecords.length === 0 &&
+                stepRecords.length === 0
+            ) {
+                return
+            }
+
+            log.info("aggregating metrics from data", {
+                sessions: sessionRecords.length,
+                messages: messageRecords.length,
+                tools: toolRecords.length,
+                steps: stepRecords.length
+            })
+
+            // Aggregate data for the last 24 hours
+            const periodEnd = Date.now()
+            const periodStart = periodEnd - 24 * 60 * 60 * 1000
+
+            const aggregated = MetricsAggregator.computeFromRecords({
+                sessionRecords,
+                messageRecords,
+                toolRecords,
+                stepRecords,
+                periodStart,
+                periodEnd,
+            })
+
+            if (aggregated) {
+                await uploadAggregated(aggregated)
+                log.info("aggregated metrics upload completed from data", {
+                    periodStart: new Date(periodStart).toISOString(),
+                    periodEnd: new Date(periodEnd).toISOString(),
+                    entriesCount: MetricsTransformer.transformAggregated(
+                        aggregated.metrics,
+                        periodStart,
+                        periodEnd
+                    ).length
+                })
+            }
+        } catch (e) {
+            log.warn("aggregated metrics upload failed from data", { error: e })
         }
     }
 

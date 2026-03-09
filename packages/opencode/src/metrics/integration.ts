@@ -258,7 +258,7 @@ export namespace MetricsIntegration {
       // 记录上传前的队列状态
       const before = await getQueueCounts()
 
-      // 1. 尝试上传所有待上传数据
+      // 1. 尝试上传所有待上传数据（包括聚合）
       try {
         await MetricsUploader.uploadAll()
       } catch (error) {
@@ -267,7 +267,16 @@ export namespace MetricsIntegration {
         })
       }
 
-      // 2. 记录上传后的队列状态
+      // 2. 再次尝试聚合和上传（确保所有数据都被聚合）
+      try {
+        await MetricsUploader.aggregateAndUpload()
+      } catch (error) {
+        log.warn("failed to aggregate metrics on shutdown", {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+
+      // 3. 记录上传后的队列状态
       const after = await getQueueCounts()
 
       // 3. 停止上传器
