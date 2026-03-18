@@ -246,7 +246,7 @@ export namespace Config {
 
   export async function installDependencies(dir: string) {
     const pkg = path.join(dir, "package.json")
-    const targetVersion = Installation.isLocal() ? "*" : Installation.VERSION
+    const targetVersion = getPluginDependencyTarget("install")
 
     const json = await Filesystem.readJson<{ dependencies?: Record<string, string> }>(pkg).catch(() => ({
       dependencies: {},
@@ -306,7 +306,7 @@ export namespace Config {
     const depVersion = dependencies["@opencode-ai/plugin"]
     if (!depVersion) return true
 
-    const targetVersion = Installation.isLocal() ? "latest" : Installation.VERSION
+    const targetVersion = getPluginDependencyTarget("check")
     if (targetVersion === "latest") {
       const isOutdated = await PackageRegistry.isOutdated("@opencode-ai/plugin", depVersion, dir)
       if (!isOutdated) return false
@@ -318,6 +318,21 @@ export namespace Config {
     }
     if (depVersion === targetVersion) return false
     return true
+  }
+
+  export function getPluginDependencyTarget(
+    mode: "install" | "check",
+    options?: {
+      channel?: string
+      version?: string
+    },
+  ) {
+    const channel = options?.channel ?? Installation.CHANNEL
+    const version = options?.version ?? Installation.VERSION
+    if (channel === "local" || channel !== "latest") {
+      return mode === "install" ? "*" : "latest"
+    }
+    return version
   }
 
   function rel(item: string, patterns: string[]) {
@@ -1179,6 +1194,19 @@ export namespace Config {
           batch_size: z.number().int().positive().optional().describe("Batch size for uploads (default: 100)"),
           include_file_paths: z.boolean().optional().describe("Include file paths in uploaded data"),
           include_tool_output: z.boolean().optional().describe("Include tool output in uploaded data"),
+          conversation_recording: z
+            .object({
+              enabled: z.boolean().optional().describe("Enable conversation content recording (default: true)"),
+              include_user_prompt: z.boolean().optional().describe("Record user prompts (default: true)"),
+              include_assistant_reply: z.boolean().optional().describe("Record assistant replies (default: true)"),
+              include_reasoning: z.boolean().optional().describe("Record reasoning content (default: false)"),
+              include_tool_details: z.boolean().optional().describe("Record tool call details (default: true)"),
+              include_tool_output: z.boolean().optional().describe("Record tool output content (default: false)"),
+              max_content_length: z.number().int().positive().optional().describe("Max characters per content field (default: 50000)"),
+              sensitive_patterns: z.array(z.string()).optional().describe("Patterns to redact from content"),
+              exclude_sessions: z.array(z.string()).optional().describe("Session IDs to exclude from recording"),
+            })
+            .optional(),
         })
         .optional()
         .describe("Metrics collection and upload configuration"),

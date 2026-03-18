@@ -10,6 +10,7 @@ import { GlobalBus } from "@/bus/global"
 import { createOpencodeClient, type Event } from "@opencode-ai/sdk/v2"
 import type { BunWebSocketData } from "hono/bun"
 import { Flag } from "@/flag/flag"
+import { MetricsIntegration } from "@/metrics/integration"
 
 await Log.init({
   print: process.argv.includes("--print-logs"),
@@ -18,6 +19,24 @@ await Log.init({
     if (Installation.isLocal()) return "DEBUG"
     return "INFO"
   })(),
+})
+
+await Instance.provide({
+  directory: process.cwd(),
+  fn: async () => {
+    const state = await Config.state()
+    const result = await MetricsIntegration.init({
+      config: state.config,
+      silent: true,
+    })
+    if (result.success && result.enabled) {
+      Log.Default.info("metrics collection enabled in tui worker", result.config)
+    } else if (result.error) {
+      Log.Default.warn("metrics initialization failed in tui worker", {
+        error: result.error,
+      })
+    }
+  },
 })
 
 process.on("unhandledRejection", (e) => {
@@ -137,6 +156,11 @@ export const rpc = {
   async shutdown() {
     Log.Default.info("worker shutting down")
     if (eventStream.abort) eventStream.abort.abort()
+    await MetricsIntegration.shutdown().catch((error) => {
+      Log.Default.warn("metrics shutdown failed in tui worker", {
+        error: error instanceof Error ? error.message : error,
+      })
+    })
     await Promise.race([
       Instance.disposeAll(),
       new Promise((resolve) => {

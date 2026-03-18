@@ -36,6 +36,15 @@ test("loads config with defaults when no files exist", async () => {
   })
 })
 
+test("uses plugin dependency targets that avoid unpublished preview versions", () => {
+  expect(Config.getPluginDependencyTarget("install", { channel: "local", version: "local" })).toBe("*")
+  expect(Config.getPluginDependencyTarget("check", { channel: "local", version: "local" })).toBe("latest")
+  expect(Config.getPluginDependencyTarget("install", { channel: "dev", version: "0.0.0-dev-123" })).toBe("*")
+  expect(Config.getPluginDependencyTarget("check", { channel: "dev", version: "0.0.0-dev-123" })).toBe("latest")
+  expect(Config.getPluginDependencyTarget("install", { channel: "latest", version: "1.2.15" })).toBe("1.2.15")
+  expect(Config.getPluginDependencyTarget("check", { channel: "latest", version: "1.2.15" })).toBe("1.2.15")
+})
+
 test("loads JSON config file", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

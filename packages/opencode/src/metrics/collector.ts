@@ -5,6 +5,8 @@ import { MetricsQueue } from "./queue"
 import { DataExtractor } from "./extractor"
 import { MetricsConfig } from "./config"
 import { Log } from "@/util/log"
+import { ConversationExtractor } from "./conversation-extractor"
+import { MetricsUploader } from "./uploader"
 
 export namespace MetricsCollector {
     const log = Log.create({ service: "metrics.collector" })
@@ -32,6 +34,7 @@ export namespace MetricsCollector {
                 try {
                     const record = DataExtractor.extractSession(event.properties.info, "created")
                     await MetricsQueue.enqueue("session", record)
+                    MetricsUploader.scheduleUploadSoon()
                 } catch (e) {
                     log.error("failed to collect session.created", { error: e })
                 }
@@ -46,6 +49,7 @@ export namespace MetricsCollector {
                     if (info.summary) {
                         const record = DataExtractor.extractSession(info, "updated")
                         await MetricsQueue.enqueue("session", record)
+                        MetricsUploader.scheduleUploadSoon()
                     }
                 } catch (e) {
                     log.error("failed to collect session.updated", { error: e })
@@ -61,12 +65,51 @@ export namespace MetricsCollector {
                     if (info.role === "assistant" && info.time.completed) {
                         const record = DataExtractor.extractAssistantMessage(info)
                         await MetricsQueue.enqueue("message", record)
+                        MetricsUploader.scheduleUploadSoon()
                     }
                 } catch (e) {
                     log.error("failed to collect message.updated", { error: e })
                 }
             }),
         )
+
+        if (MetricsConfig.isConversationRecordingEnabled()) {
+            unsubscribers.push(
+                Bus.subscribe(MessageV2.Event.Updated, async (event) => {
+                    try {
+                        const info = event.properties.info
+                        if (info.role !== "user") return
+
+                        const parts = await MessageV2.parts(info.id)
+                        const record = ConversationExtractor.extractUserPrompt(info, parts)
+                        if (record) {
+                            await MetricsQueue.enqueue("conversation", record)
+                            MetricsUploader.scheduleUploadSoon()
+                        }
+                    } catch (e) {
+                        log.error("failed to collect user prompt", { error: e })
+                    }
+                }),
+            )
+
+            unsubscribers.push(
+                Bus.subscribe(MessageV2.Event.Updated, async (event) => {
+                    try {
+                        const info = event.properties.info
+                        if (info.role !== "assistant" || !info.time.completed) return
+
+                        const parts = await MessageV2.parts(info.id)
+                        const record = ConversationExtractor.extractAssistantReply(info, parts)
+                        if (record) {
+                            await MetricsQueue.enqueue("conversation", record)
+                            MetricsUploader.scheduleUploadSoon()
+                        }
+                    } catch (e) {
+                        log.error("failed to collect assistant reply", { error: e })
+                    }
+                }),
+            )
+        }
 
         // 4. Part updated (tool calls and step finish)
         unsubscribers.push(
@@ -80,11 +123,13 @@ export namespace MetricsCollector {
                     ) {
                         const record = DataExtractor.extractToolCall(part)
                         await MetricsQueue.enqueue("tool", record)
+                        MetricsUploader.scheduleUploadSoon()
                     }
 
                     if (part.type === "step-finish") {
                         const record = DataExtractor.extractStepFinish(part)
                         await MetricsQueue.enqueue("step", record)
+                        MetricsUploader.scheduleUploadSoon()
                     }
                 } catch (e) {
                     log.error("failed to collect part.updated", { error: e })
@@ -92,7 +137,10 @@ export namespace MetricsCollector {
             }),
         )
 
-        log.info("metrics collector initialized with 4 event listeners")
+        log.info("metrics collector initialized", {
+            listeners: unsubscribers.length,
+            conversationRecording: MetricsConfig.isConversationRecordingEnabled(),
+        })
         return true
     }
 

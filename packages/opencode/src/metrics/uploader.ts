@@ -7,18 +7,20 @@ import { Log } from "@/util/log"
 export namespace MetricsUploader {
     const log = Log.create({ service: "metrics.uploader" })
 
-    const CATEGORIES = ["session", "message", "tool", "step"] as const
+    const CATEGORIES = ["session", "message", "tool", "step", "conversation"] as const
     const API_PATHS: Record<string, string> = {
         session: "/api/v1/metrics/report",    // unified event endpoint
         message: "/api/v1/metrics/report",    // unified event endpoint
         tool: "/api/v1/metrics/report",    // unified event endpoint
         step: "/api/v1/metrics/report",    // unified event endpoint
+        conversation: "/api/v1/conversations/report",
         aggregated: "/api/data-entry/batch",     // reuse existing batch data entry
         heartbeat: "/api/v1/heartbeat",         // new heartbeat endpoint
     }
 
     let uploadTimer: ReturnType<typeof setInterval> | null = null
     let aggregationTimer: ReturnType<typeof setInterval> | null = null
+    let fastUploadTimer: ReturnType<typeof setTimeout> | null = null
 
     // ── JWT Token Management ──────────────────────────────────────────
 
@@ -137,6 +139,19 @@ export namespace MetricsUploader {
             clearInterval(aggregationTimer)
             aggregationTimer = null
         }
+        if (fastUploadTimer) {
+            clearTimeout(fastUploadTimer)
+            fastUploadTimer = null
+        }
+    }
+
+    export function scheduleUploadSoon(delayMs = 2000) {
+        if (!MetricsConfig.isEnabled()) return
+        if (fastUploadTimer) clearTimeout(fastUploadTimer)
+        fastUploadTimer = setTimeout(() => {
+            fastUploadTimer = null
+            uploadAll().catch((e) => log.warn("fast upload failed", { error: e }))
+        }, delayMs)
     }
 
     // ── Upload Logic ───────────────────────────────────────────────────
