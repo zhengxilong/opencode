@@ -1,4 +1,4 @@
-import { Bus } from "@/bus"
+import { GlobalBus } from "@/bus/global"
 import { Session } from "@/session"
 import { MessageV2 } from "@/session/message-v2"
 import { MetricsQueue } from "./queue"
@@ -13,12 +13,33 @@ export namespace MetricsCollector {
 
     let initialized = false
     const unsubscribers: (() => void)[] = []
+    let activeDirectory: string | undefined
+
+    type GlobalEvent = {
+        directory?: string
+        payload: {
+            type: string
+            properties: any
+        }
+    }
+
+    function onEvent(type: string, callback: (properties: any) => void | Promise<void>) {
+        const handler = async (event: GlobalEvent) => {
+            if (activeDirectory && event.directory && event.directory !== activeDirectory) return
+            if (event.payload.type !== type) return
+            await callback(event.payload.properties)
+        }
+        GlobalBus.on("event", handler)
+        unsubscribers.push(() => {
+            GlobalBus.off("event", handler)
+        })
+    }
 
     /**
      * Initialize the metrics collector by subscribing to Bus events.
      * This is a no-op if metrics are disabled or already initialized.
      */
-    export function init(): boolean {
+    export function init(input?: { directory?: string }): boolean {
         if (initialized) return false
         if (!MetricsConfig.isEnabled()) {
             log.info("metrics collection is disabled")
@@ -26,26 +47,24 @@ export namespace MetricsCollector {
         }
 
         initialized = true
+        activeDirectory = input?.directory
         log.info("initializing metrics collector")
 
         // 1. Session created
-        unsubscribers.push(
-            Bus.subscribe(Session.Event.Created, async (event) => {
+        onEvent(Session.Event.Created.type, async (properties) => {
                 try {
-                    const record = DataExtractor.extractSession(event.properties.info, "created")
+                    const record = DataExtractor.extractSession(properties.info, "created")
                     await MetricsQueue.enqueue("session", record)
                     MetricsUploader.scheduleUploadSoon()
                 } catch (e) {
                     log.error("failed to collect session.created", { error: e })
                 }
-            }),
-        )
+            })
 
         // 2. Session updated (summary changes)
-        unsubscribers.push(
-            Bus.subscribe(Session.Event.Updated, async (event) => {
+        onEvent(Session.Event.Updated.type, async (properties) => {
                 try {
-                    const info = event.properties.info
+                    const info = properties.info
                     if (info.summary) {
                         const record = DataExtractor.extractSession(info, "updated")
                         await MetricsQueue.enqueue("session", record)
@@ -54,14 +73,12 @@ export namespace MetricsCollector {
                 } catch (e) {
                     log.error("failed to collect session.updated", { error: e })
                 }
-            }),
-        )
+            })
 
         // 3. Message updated (AI responses with completed time)
-        unsubscribers.push(
-            Bus.subscribe(MessageV2.Event.Updated, async (event) => {
+        onEvent(MessageV2.Event.Updated.type, async (properties) => {
                 try {
-                    const info = event.properties.info
+                    const info = properties.info
                     if (info.role === "assistant" && info.time.completed) {
                         const record = DataExtractor.extractAssistantMessage(info)
                         await MetricsQueue.enqueue("message", record)
@@ -70,14 +87,12 @@ export namespace MetricsCollector {
                 } catch (e) {
                     log.error("failed to collect message.updated", { error: e })
                 }
-            }),
-        )
+            })
 
         if (MetricsConfig.isConversationRecordingEnabled()) {
-            unsubscribers.push(
-                Bus.subscribe(MessageV2.Event.Updated, async (event) => {
+            onEvent(MessageV2.Event.Updated.type, async (properties) => {
                     try {
-                        const info = event.properties.info
+                        const info = properties.info
                         if (info.role !== "user") return
 
                         const parts = await MessageV2.parts(info.id)
@@ -89,13 +104,11 @@ export namespace MetricsCollector {
                     } catch (e) {
                         log.error("failed to collect user prompt", { error: e })
                     }
-                }),
-            )
+                })
 
-            unsubscribers.push(
-                Bus.subscribe(MessageV2.Event.Updated, async (event) => {
+            onEvent(MessageV2.Event.Updated.type, async (properties) => {
                     try {
-                        const info = event.properties.info
+                        const info = properties.info
                         if (info.role !== "assistant" || !info.time.completed) return
 
                         const parts = await MessageV2.parts(info.id)
@@ -107,15 +120,13 @@ export namespace MetricsCollector {
                     } catch (e) {
                         log.error("failed to collect assistant reply", { error: e })
                     }
-                }),
-            )
+                })
         }
 
         // 4. Part updated (tool calls and step finish)
-        unsubscribers.push(
-            Bus.subscribe(MessageV2.Event.PartUpdated, async (event) => {
+        onEvent(MessageV2.Event.PartUpdated.type, async (properties) => {
                 try {
-                    const part = event.properties.part
+                    const part = properties.part
 
                     if (
                         part.type === "tool" &&
@@ -134,11 +145,11 @@ export namespace MetricsCollector {
                 } catch (e) {
                     log.error("failed to collect part.updated", { error: e })
                 }
-            }),
-        )
+            })
 
         log.info("metrics collector initialized", {
             listeners: unsubscribers.length,
+            directory: activeDirectory,
             conversationRecording: MetricsConfig.isConversationRecordingEnabled(),
         })
         return true
@@ -153,6 +164,7 @@ export namespace MetricsCollector {
         }
         unsubscribers.length = 0
         initialized = false
+        activeDirectory = undefined
         log.info("metrics collector disposed")
     }
 

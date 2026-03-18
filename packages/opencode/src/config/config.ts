@@ -943,6 +943,38 @@ export namespace Config {
   })
   export type Layout = z.infer<typeof Layout>
 
+  export const Language = z
+    .union([
+      z.string().describe("Language code, eg zh-CN, en, ja, auto"),
+      z
+        .object({
+          user: z.string().optional().describe("Preferred user-facing language"),
+          fallback: z.string().optional().describe("Fallback language when auto detection fails"),
+          response: z.enum(["localized", "english", "bilingual"]).optional(),
+          documentation: z.enum(["localized", "english", "bilingual"]).optional(),
+          document_file_name: z.enum(["localized", "english", "source"]).optional(),
+          document_path: z.enum(["english", "localized", "project-default"]).optional(),
+          comments: z.enum(["localized", "english", "none", "project-default"]).optional(),
+          ui: z.enum(["localized", "english", "bilingual", "project-default"]).optional(),
+          errors: z.enum(["localized-summary", "english", "bilingual"]).optional(),
+          diff_summary: z.enum(["localized", "english", "bilingual"]).optional(),
+          tests: z.enum(["localized", "english", "project-default"]).optional(),
+          terms: z.enum(["english-only", "localized-only", "bilingual", "project-default"]).optional(),
+          strictness: z.enum(["strict", "balanced", "flexible"]).optional(),
+          path_case: z
+            .enum(["kebab-case", "snake_case", "camelCase", "pascal-case", "project-default"])
+            .optional(),
+          auto_detect_project_convention: z.boolean().optional(),
+          builtin_instruction_override: z.string().optional(),
+        })
+        .strict(),
+    ])
+    .optional()
+    .meta({
+      ref: "LanguageConfig",
+    })
+  export type Language = z.infer<typeof Language>
+
   export const Provider = ModelsDev.Provider.partial()
     .extend({
       whitelist: z.array(z.string()).optional(),
@@ -1141,6 +1173,7 @@ export namespace Config {
           },
         ),
       instructions: z.array(z.string()).optional().describe("Additional instruction files or patterns to include"),
+      language: Language.describe("Language preferences for replies, documentation, comments, UI, and paths"),
       layout: Layout.optional().describe("@deprecated Always uses stretch layout."),
       permission: Permission.optional(),
       tools: z.record(z.string(), z.boolean()).optional(),
@@ -1339,10 +1372,26 @@ export namespace Config {
   }
 
   export async function update(config: Info) {
-    const filepath = path.join(Instance.directory, "config.json")
+    const filepath = await projectConfigFile()
     const existing = await loadFile(filepath)
-    await Filesystem.writeJson(filepath, mergeDeep(existing, config))
+    if (filepath.endsWith(".jsonc")) {
+      const before = await Filesystem.readText(filepath).catch(() => "{}")
+      const updated = patchJsonc(before, config)
+      parseConfig(updated, filepath)
+      await Filesystem.write(filepath, updated)
+    } else {
+      await Filesystem.writeJson(filepath, mergeDeep(existing, config))
+    }
     await Instance.dispose()
+  }
+
+  async function projectConfigFile() {
+    const files = await ConfigPaths.projectFiles("opencode", Instance.directory, Instance.worktree)
+    const preferred = files.find((file) => file.startsWith(Instance.directory + path.sep))
+    if (preferred) return preferred
+    const local = files.find((file) => path.dirname(file) === Instance.directory)
+    if (local) return local
+    return path.join(Instance.directory, "opencode.json")
   }
 
   function globalConfigFile() {

@@ -600,8 +600,46 @@ test("updates config and writes to file", async () => {
       const newConfig = { model: "updated/model" }
       await Config.update(newConfig as any)
 
-      const writtenConfig = await Filesystem.readJson(path.join(tmp.path, "config.json"))
+      const writtenConfig = await Filesystem.readJson(path.join(tmp.path, "opencode.json"))
       expect(writtenConfig.model).toBe("updated/model")
+    },
+  })
+})
+
+test("updates existing opencode.jsonc file", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Filesystem.write(
+        path.join(dir, "opencode.jsonc"),
+        `{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "base/model"
+}`,
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await Config.update({
+        language: {
+          user: "zh-CN",
+          comments: "english",
+        },
+      } as any)
+
+      const written = await Filesystem.readText(path.join(tmp.path, "opencode.jsonc"))
+      expect(written).toContain(`"user": "zh-CN"`)
+      expect(written).toContain(`"comments": "english"`)
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(typeof config.language).toBe("object")
     },
   })
 })

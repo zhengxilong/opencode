@@ -37,11 +37,25 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const agent = iife(() => {
       const agents = createMemo(() => sync.data.agent.filter((x) => x.mode !== "subagent" && !x.hidden))
       const visibleAgents = createMemo(() => sync.data.agent.filter((x) => !x.hidden))
+      let lastKnownAgent: (typeof sync.data.agent)[number] | undefined
       const [agentStore, setAgentStore] = createStore<{
         current: string
       }>({
-        current: agents()[0].name,
+        current: agents()[0]?.name ?? "build",
       })
+      const currentAgent = createMemo(() => {
+        const next = agents().find((x) => x.name === agentStore.current) ?? agents()[0] ?? visibleAgents()[0] ?? lastKnownAgent
+        if (next) lastKnownAgent = next
+        return next
+      })
+
+      createEffect(() => {
+        const next = currentAgent()
+        if (next && agentStore.current !== next.name) {
+          setAgentStore("current", next.name)
+        }
+      })
+
       const { theme } = useTheme()
       const colors = createMemo(() => [
         theme.secondary,
@@ -57,7 +71,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return agents()
         },
         current() {
-          return agents().find((x) => x.name === agentStore.current)!
+          return currentAgent() ?? ({ name: "build" } as (typeof sync.data.agent)[number])
         },
         set(name: string) {
           if (!agents().some((x) => x.name === name))

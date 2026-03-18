@@ -10,6 +10,7 @@ import PROMPT_GEMINI from "./prompt/gemini.txt"
 import PROMPT_CODEX from "./prompt/codex_header.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
 import type { Provider } from "@/provider/provider"
+import { LanguageManager } from "@/language/language"
 
 export namespace SystemPrompt {
   export function instructions() {
@@ -28,6 +29,7 @@ export namespace SystemPrompt {
 
   export async function environment(model: Provider.Model) {
     const project = Instance.project
+    const language = await LanguageManager.getPolicy()
     return [
       [
         `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
@@ -37,7 +39,25 @@ export namespace SystemPrompt {
         `  Is directory a git repo: ${project.vcs === "git" ? "yes" : "no"}`,
         `  Platform: ${process.platform}`,
         `  Today's date: ${new Date().toDateString()}`,
+        `  Preferred user language: ${language.nativeName} (${language.userLanguage})`,
+        `  Fallback language: ${language.fallbackLanguage}`,
+        `  Response language policy: ${language.responseLanguage}`,
+        `  Documentation language policy: ${language.documentationLanguage}`,
+        `  Documentation file name policy: ${language.documentFileNamePolicy}`,
+        `  Documentation path policy: ${language.documentPathPolicy}`,
+        `  Comment language policy: ${language.commentLanguage}`,
+        `  UI language policy: ${language.uiLanguage}`,
+        `  Error language policy: ${language.errorLanguage}`,
+        `  Diff summary language policy: ${language.diffSummaryLanguage}`,
+        `  Test description language policy: ${language.testDescriptionLanguage}`,
+        `  Terminology policy: ${language.termsPolicy}`,
+        `  Language strictness: ${language.strictness}`,
+        `  Path naming style: ${language.pathCase}`,
         `</env>`,
+        ``,
+        `<language_policy>`,
+        language.instruction,
+        `</language_policy>`,
         `<directories>`,
         `  ${
           project.vcs === "git" && false

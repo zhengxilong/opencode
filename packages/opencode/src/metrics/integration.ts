@@ -7,6 +7,7 @@ import { MetricsUploader } from "./uploader"
 import { Log } from "@/util/log"
 import { Global } from "@/global"
 import type { Config } from "@/config/config"
+import { Instance } from "@/project/instance"
 
 /**
  * Metrics 集成模块
@@ -187,7 +188,9 @@ export namespace MetricsIntegration {
       MetricsQueue.setQueueDir(queueDir)
 
       // 6. 初始化采集器
-      const collectorInitialized = MetricsCollector.init()
+      const collectorInitialized = MetricsCollector.init({
+        directory: Instance.directory,
+      })
       if (!collectorInitialized) {
         throw new MetricsIntegrationError(
           MetricsIntegrationErrorType.INIT_ERROR,

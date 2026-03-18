@@ -25,6 +25,11 @@ export function Home() {
   const route = useRouteData("home")
   const promptRef = usePromptRef()
   const command = useCommandDialog()
+  const language = createMemo(() => {
+    const cfg = (sync.data.config as any).language
+    if (!cfg) return undefined
+    return typeof cfg === "string" ? cfg : cfg.user
+  })
   const mcp = createMemo(() => Object.keys(sync.data.mcp).length > 0)
   const mcpError = createMemo(() => {
     return Object.values(sync.data.mcp).some((x) => x.status === "failed")
@@ -120,6 +125,9 @@ export function Home() {
       <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexDirection="row" flexShrink={0} gap={2}>
         <text fg={theme.textMuted}>{directory()}</text>
         <box gap={1} flexDirection="row" flexShrink={0}>
+          <Show when={language()}>
+            {(item) => <text fg={theme.text}>lang {item()}</text>}
+          </Show>
           <Show when={mcp()}>
             <text fg={theme.text}>
               <Switch>

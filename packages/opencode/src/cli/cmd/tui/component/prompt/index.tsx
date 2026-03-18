@@ -34,6 +34,7 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
+import { DialogLanguage } from "../dialog-language"
 
 export type PromptProps = {
   sessionID?: string
@@ -95,6 +96,10 @@ export function Prompt(props: PromptProps) {
   const agentStyleId = syntax().getStyleId("extmark.agent")!
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
   let promptPartTypeId = 0
+
+  const currentAgent = createMemo(() => local.agent.current())
+  const currentAgentName = createMemo(() => currentAgent()?.name ?? "build")
+  const currentAgentColor = createMemo(() => local.agent.color(currentAgentName()))
 
   sdk.event.on(TuiEvent.PromptAppend.type, (evt) => {
     if (!input || input.isDestroyed) return
@@ -351,6 +356,18 @@ export function Prompt(props: PromptProps) {
           ))
         },
       },
+      {
+        title: "Language",
+        value: "prompt.language",
+        category: "Prompt",
+        slash: {
+          name: "language",
+          aliases: ["lang"],
+        },
+        onSelect: () => {
+          dialog.replace(() => <DialogLanguage />)
+        },
+      },
     ]
   })
 
@@ -574,7 +591,7 @@ export function Prompt(props: PromptProps) {
     if (store.mode === "shell") {
       sdk.client.session.shell({
         sessionID,
-        agent: local.agent.current().name,
+        agent: currentAgentName(),
         model: {
           providerID: selectedModel.providerID,
           modelID: selectedModel.modelID,
@@ -601,7 +618,7 @@ export function Prompt(props: PromptProps) {
         sessionID,
         command: command.slice(1),
         arguments: args,
-        agent: local.agent.current().name,
+        agent: currentAgentName(),
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
         messageID,
         variant,
@@ -618,7 +635,7 @@ export function Prompt(props: PromptProps) {
           sessionID,
           ...selectedModel,
           messageID,
-          agent: local.agent.current().name,
+          agent: currentAgentName(),
           model: selectedModel,
           variant,
           parts: [
@@ -739,7 +756,7 @@ export function Prompt(props: PromptProps) {
   const highlight = createMemo(() => {
     if (keybind.leader) return theme.border
     if (store.mode === "shell") return theme.primary
-    return local.agent.color(local.agent.current().name)
+    return currentAgentColor()
   })
 
   const showVariant = createMemo(() => {
@@ -759,7 +776,7 @@ export function Prompt(props: PromptProps) {
   })
 
   const spinnerDef = createMemo(() => {
-    const color = local.agent.color(local.agent.current().name)
+    const color = currentAgentColor()
     return {
       frames: createFrames({
         color,
@@ -998,7 +1015,7 @@ export function Prompt(props: PromptProps) {
             />
             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1}>
               <text fg={highlight()}>
-                {store.mode === "shell" ? "Shell" : Locale.titlecase(local.agent.current().name)}{" "}
+                {store.mode === "shell" ? "Shell" : Locale.titlecase(currentAgentName())}{" "}
               </text>
               <Show when={store.mode === "normal"}>
                 <box flexDirection="row" gap={1}>

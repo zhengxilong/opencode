@@ -7,6 +7,11 @@ import { MetricsConfig } from "../../src/metrics/config"
 import { MetricsQueue } from "../../src/metrics/queue"
 import { DataExtractor } from "../../src/metrics/extractor"
 import { MetricsAggregator } from "../../src/metrics/aggregator"
+import { MetricsCollector } from "../../src/metrics/collector"
+import { MetricsUploader } from "../../src/metrics/uploader"
+import { Instance } from "../../src/project/instance"
+import { Bus } from "../../src/bus"
+import { Session } from "../../src/session"
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
@@ -28,6 +33,10 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+    MetricsCollector.dispose()
+    MetricsUploader.stop()
+    MetricsUploader.resetAuthState()
+    await Instance.disposeAll().catch(() => {})
     MetricsConfig.setConfig({
         enabled: false,
         api_base_url: "",
@@ -253,6 +262,48 @@ describe("MetricsQueue", () => {
         expect(sessions[0].type).toBe("session")
         expect(messages[0].type).toBe("message")
         expect(tools[0].type).toBe("tool")
+    })
+})
+
+describe("MetricsCollector", () => {
+    test("continues collecting after instance disposal and recreation", async () => {
+        const projectDir = path.join(tmpDir, "project")
+        await fs.mkdir(projectDir, { recursive: true })
+
+        expect(
+            MetricsCollector.init({
+                directory: projectDir,
+            }),
+        ).toBe(true)
+
+        await Instance.provide({
+            directory: projectDir,
+            fn: async () => {
+                await Bus.publish(Session.Event.Created, {
+                    info: makeSessionInfo({ id: "session_before_reload" }),
+                })
+            },
+        })
+        await Bun.sleep(10)
+
+        await Instance.disposeAll()
+
+        await Instance.provide({
+            directory: projectDir,
+            fn: async () => {
+                await Bus.publish(Session.Event.Created, {
+                    info: makeSessionInfo({ id: "session_after_reload" }),
+                })
+            },
+        })
+        await Bun.sleep(10)
+
+        const results = await MetricsQueue.dequeue("session")
+        expect(results).toHaveLength(2)
+        expect(results.map((item) => item.data.session_id)).toEqual([
+            "session_before_reload",
+            "session_after_reload",
+        ])
     })
 })
 

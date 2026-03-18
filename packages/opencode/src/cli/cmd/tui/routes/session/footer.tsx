@@ -19,6 +19,11 @@ export function Footer() {
   })
   const directory = useDirectory()
   const connected = useConnected()
+  const language = createMemo(() => {
+    const cfg = (sync.data.config as any).language
+    if (!cfg) return undefined
+    return typeof cfg === "string" ? cfg : cfg.user
+  })
 
   const [store, setStore] = createStore({
     welcome: false,
@@ -81,6 +86,9 @@ export function Footer() {
                 </Switch>
                 {mcp()} MCP
               </text>
+            </Show>
+            <Show when={language()}>
+              {(item) => <text fg={theme.text}>lang {item()}</text>}
             </Show>
             <text fg={theme.textMuted}>/status</text>
           </Match>
