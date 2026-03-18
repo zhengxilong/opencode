@@ -5,6 +5,14 @@ import { Log } from "@/util/log"
 export namespace MetricsConfig {
   const log = Log.create({ service: "metrics.config" })
 
+  export interface FeedbackOptions {
+    enabled: boolean
+    show_prompt: boolean
+    detailed_negative: boolean
+    auto_dismiss_seconds: number
+    custom_reasons: string[]
+  }
+
   export interface ConversationRecordingOptions {
     enabled: boolean
     include_user_prompt: boolean
@@ -28,11 +36,21 @@ export namespace MetricsConfig {
     batch_size: number
     include_file_paths: boolean
     include_tool_output: boolean
+    feedback: FeedbackOptions
     conversation_recording: ConversationRecordingOptions
   }
 
-  type RuntimeMetricsOptions = Partial<Omit<MetricsOptions, "conversation_recording">> & {
+  type RuntimeMetricsOptions = Partial<Omit<MetricsOptions, "conversation_recording" | "feedback">> & {
+    feedback?: Partial<FeedbackOptions>
     conversation_recording?: Partial<ConversationRecordingOptions>
+  }
+
+  const feedbackDefaults: FeedbackOptions = {
+    enabled: true,
+    show_prompt: true,
+    detailed_negative: true,
+    auto_dismiss_seconds: 30,
+    custom_reasons: [],
   }
 
   const conversationDefaults: ConversationRecordingOptions = {
@@ -65,6 +83,7 @@ export namespace MetricsConfig {
     batch_size: 100,
     include_file_paths: false,
     include_tool_output: false,
+    feedback: feedbackDefaults,
     conversation_recording: conversationDefaults,
   }
 
@@ -75,6 +94,10 @@ export namespace MetricsConfig {
     runtimeConfig = {
       ...runtimeConfig,
       ...config,
+      feedback: {
+        ...runtimeConfig.feedback,
+        ...config.feedback,
+      },
       conversation_recording: {
         ...runtimeConfig.conversation_recording,
         ...config.conversation_recording,
@@ -90,6 +113,10 @@ export namespace MetricsConfig {
     return {
       ...defaults,
       ...runtimeConfig,
+      feedback: {
+        ...feedbackDefaults,
+        ...runtimeConfig.feedback,
+      },
       conversation_recording: {
         ...conversationDefaults,
         ...runtimeConfig.conversation_recording,
@@ -132,6 +159,14 @@ export namespace MetricsConfig {
 
   export function shouldIncludeToolOutput(): boolean {
     return getConfig().include_tool_output
+  }
+
+  export function isFeedbackEnabled(): boolean {
+    return isEnabled() && getFeedbackConfig().enabled
+  }
+
+  export function getFeedbackConfig(): FeedbackOptions {
+    return getConfig().feedback
   }
 
   export function isConversationRecordingEnabled(): boolean {

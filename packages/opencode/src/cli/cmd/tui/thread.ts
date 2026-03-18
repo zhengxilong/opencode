@@ -14,6 +14,11 @@ import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
+import { Config } from "@/config/config"
+import { MetricsConfig } from "@/metrics/config"
+import { MetricsQueue } from "@/metrics/queue"
+import { Global } from "@/global"
+import { mkdir } from "fs/promises"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -140,6 +145,17 @@ export const TuiThreadCommand = cmd({
       const config = await Instance.provide({
         directory: cwd,
         fn: () => TuiConfig.get(),
+      })
+      await Instance.provide({
+        directory: cwd,
+        fn: async () => {
+          const state = await Config.state()
+          if (!state.config.metrics) return
+          MetricsConfig.setConfig(state.config.metrics)
+          const queueDir = path.join(Global.Path.data, "metrics", "queue")
+          await mkdir(queueDir, { recursive: true })
+          MetricsQueue.setQueueDir(queueDir)
+        },
       })
 
       // Check if server should be started (port or hostname explicitly set in CLI or config)

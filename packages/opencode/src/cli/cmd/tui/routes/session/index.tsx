@@ -81,6 +81,10 @@ import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { formatTranscript } from "../../util/transcript"
 import { UI } from "@/cli/ui.ts"
 import { useTuiConfig } from "../../context/tui-config"
+import { DialogAlert } from "../../ui/dialog-alert"
+import { FeedbackPrompt } from "./feedback-prompt"
+import { MetricsConfig } from "@/metrics/config"
+import { FeedbackManager } from "@/metrics/feedback-manager"
 
 addDefaultParsers(parsers.parsers)
 
@@ -144,6 +148,15 @@ export function Session() {
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
+  })
+  const [feedbackState, setFeedbackState] = createSignal<"hidden" | "idle" | "detail" | "submitted">("hidden")
+  const [feedbackMessageID, setFeedbackMessageID] = createSignal("")
+  const [feedbackSelected, setFeedbackSelected] = createSignal<string[]>([])
+  const [feedbackComment, setFeedbackComment] = createSignal("")
+  const feedbackDisplayMode = createMemo<"idle" | "detail" | "submitted">(() => {
+    if (feedbackState() === "detail") return "detail"
+    if (feedbackState() === "submitted") return "submitted"
+    return "idle"
   })
 
   const dimensions = useTerminalDimensions()
@@ -261,6 +274,81 @@ export function Session() {
     }
   })
 
+  useKeyboard((evt) => {
+    if (feedbackState() === "hidden") return
+    if (session()?.parentID) return
+    if (dialog.stack.length > 0) return
+    if (permissions().length > 0 || questions().length > 0) return
+    if (evt.ctrl || evt.meta) return
+
+    if (feedbackState() === "detail") {
+      if (evt.name === "escape") {
+        evt.preventDefault()
+        setFeedbackState("idle")
+        setFeedbackSelected([])
+        setFeedbackComment("")
+        return
+      }
+      if (evt.name === "return") {
+        evt.preventDefault()
+        if (feedbackSelected().length === 0) return
+        void submitFeedback("negative", feedbackSelected(), feedbackComment())
+        return
+      }
+      if (evt.name === "backspace") {
+        evt.preventDefault()
+        setFeedbackComment((value) => value.slice(0, -1))
+        return
+      }
+      if (evt.name === "space") {
+        evt.preventDefault()
+        if (feedbackComment().length >= 200) return
+        setFeedbackComment((value) => value + " ")
+        return
+      }
+      if (evt.name && /^[1-9]$/.test(evt.name)) {
+        evt.preventDefault()
+        const item = FeedbackManager.getAllReasons()[Number(evt.name) - 1]
+        if (!item) return
+        setFeedbackSelected((value) =>
+          value.includes(item.key) ? value.filter((entry) => entry !== item.key) : [...value, item.key],
+        )
+        return
+      }
+      if (evt.name && evt.name.length === 1 && feedbackComment().length < 200) {
+        evt.preventDefault()
+        setFeedbackComment((value) => value + evt.name)
+      }
+      return
+    }
+
+    if (feedbackState() !== "idle" || !evt.name) return
+    if (evt.name === "u") {
+      evt.preventDefault()
+      void submitFeedback("positive")
+      return
+    }
+    if (evt.name === "d") {
+      evt.preventDefault()
+      if (!feedbackConfig().detailed_negative) {
+        void submitFeedback("negative")
+        return
+      }
+      setFeedbackSelected([])
+      setFeedbackComment("")
+      setFeedbackState("detail")
+      return
+    }
+    if (evt.name === "s") {
+      evt.preventDefault()
+      dismissFeedback(true)
+      return
+    }
+    if (evt.name.length === 1 || evt.name === "backspace") {
+      dismissFeedback(true)
+    }
+  })
+
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
     const children = scroll.getChildren()
@@ -315,6 +403,60 @@ export function Session() {
   }
 
   const local = useLocal()
+  const feedbackConfig = createMemo(() => MetricsConfig.getFeedbackConfig())
+
+  onMount(() => {
+    FeedbackManager.resetSession()
+  })
+
+  createEffect(() => {
+    const msg = lastAssistant()
+    if (!msg?.time.completed) return
+    if (!MetricsConfig.isFeedbackEnabled()) return
+    if (!feedbackConfig().show_prompt) return
+    if (feedbackMessageID() === msg.id) return
+    FeedbackManager.setPendingMessage(msg.id, route.sessionID, msg.time.completed)
+    setFeedbackMessageID(msg.id)
+    setFeedbackSelected([])
+    setFeedbackComment("")
+    setFeedbackState("idle")
+  })
+
+  createEffect(() => {
+    if (feedbackState() !== "idle") return
+    if (!feedbackConfig().auto_dismiss_seconds) return
+    const timer = setTimeout(() => {
+      if (feedbackState() !== "idle") return
+      FeedbackManager.clearPending(true)
+      setFeedbackState("hidden")
+    }, feedbackConfig().auto_dismiss_seconds * 1000)
+    return () => clearTimeout(timer)
+  })
+
+  createEffect(() => {
+    if (feedbackState() !== "submitted") return
+    const timer = setTimeout(() => {
+      setFeedbackState("hidden")
+    }, 1000)
+    return () => clearTimeout(timer)
+  })
+
+  function dismissFeedback(skipped = false) {
+    if (feedbackState() === "hidden") return
+    FeedbackManager.clearPending(skipped)
+    setFeedbackState("hidden")
+  }
+
+  async function submitFeedback(rating: "positive" | "negative", reasons?: string[], comment?: string) {
+    const ok = await FeedbackManager.submit(rating, reasons, comment)
+    if (!ok) {
+      setFeedbackState("hidden")
+      return
+    }
+    setFeedbackState("submitted")
+    setFeedbackSelected([])
+    setFeedbackComment("")
+  }
 
   function moveFirstChild() {
     if (children().length === 1) return
@@ -909,6 +1051,35 @@ export function Session() {
       },
     },
     {
+      title: "Session feedback summary",
+      value: "session.feedback.summary",
+      category: "Session",
+      slash: {
+        name: "feedback",
+        aliases: ["fb"],
+      },
+      onSelect: (dialog) => {
+        const summary = FeedbackManager.getSessionSummary()
+        const reasons = Object.entries(summary.negative_reasons)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([key, count]) => `${key} (${count})`)
+          .join("、")
+        DialogAlert.show(
+          dialog,
+          "本次会话反馈摘要",
+          [
+            `总回复: ${summary.total_replies}`,
+            `已评价: ${summary.rated_count}`,
+            `跳过: ${summary.skipped_count}`,
+            `👍 有用: ${summary.positive_count}`,
+            `👎 无用: ${summary.negative_count}`,
+            `差评原因: ${reasons || "暂无"}`,
+          ].join("\n"),
+        )
+      },
+    },
+    {
       title: "Go to child session",
       value: "session.child.first",
       keybind: "session_child_first",
@@ -1154,8 +1325,21 @@ export function Session() {
               <Show when={permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
               </Show>
+              <Show when={feedbackState() !== "hidden" && permissions().length === 0 && questions().length === 0}>
+                <FeedbackPrompt
+                  mode={feedbackDisplayMode()}
+                  reasons={FeedbackManager.getAllReasons()}
+                  selected={feedbackSelected()}
+                  comment={feedbackComment()}
+                />
+              </Show>
               <Prompt
-                visible={!session()?.parentID && permissions().length === 0 && questions().length === 0}
+                visible={
+                  !session()?.parentID &&
+                  permissions().length === 0 &&
+                  questions().length === 0 &&
+                  feedbackState() !== "detail"
+                }
                 ref={(r) => {
                   prompt = r
                   promptRef.set(r)
@@ -1166,10 +1350,14 @@ export function Session() {
                 }}
                 disabled={permissions().length > 0 || questions().length > 0}
                 onSubmit={() => {
+                  dismissFeedback(true)
                   toBottom()
                 }}
                 sessionID={route.sessionID}
               />
+              <Show when={!session()?.parentID}>
+                <Footer />
+              </Show>
             </box>
           </Show>
           <Toast />

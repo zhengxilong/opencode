@@ -7,13 +7,14 @@ import { Log } from "@/util/log"
 export namespace MetricsUploader {
     const log = Log.create({ service: "metrics.uploader" })
 
-    const CATEGORIES = ["session", "message", "tool", "step", "conversation"] as const
+    const CATEGORIES = ["session", "message", "tool", "step", "conversation", "feedback"] as const
     const API_PATHS: Record<string, string> = {
         session: "/api/v1/metrics/report",    // unified event endpoint
         message: "/api/v1/metrics/report",    // unified event endpoint
         tool: "/api/v1/metrics/report",    // unified event endpoint
         step: "/api/v1/metrics/report",    // unified event endpoint
         conversation: "/api/v1/conversations/report",
+        feedback: "/api/v1/feedback/report",
         aggregated: "/api/data-entry/batch",     // reuse existing batch data entry
         heartbeat: "/api/v1/heartbeat",         // new heartbeat endpoint
     }

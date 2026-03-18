@@ -1194,6 +1194,15 @@ export namespace Config {
           batch_size: z.number().int().positive().optional().describe("Batch size for uploads (default: 100)"),
           include_file_paths: z.boolean().optional().describe("Include file paths in uploaded data"),
           include_tool_output: z.boolean().optional().describe("Include tool output in uploaded data"),
+          feedback: z
+            .object({
+              enabled: z.boolean().optional().describe("Enable feedback prompt after AI replies (default: true)"),
+              show_prompt: z.boolean().optional().describe("Show inline feedback prompt in TUI (default: true)"),
+              detailed_negative: z.boolean().optional().describe("Show detailed negative feedback options (default: true)"),
+              auto_dismiss_seconds: z.number().int().min(0).optional().describe("Auto-dismiss feedback prompt after N seconds (default: 30)"),
+              custom_reasons: z.array(z.string()).optional().describe("Additional custom negative feedback reasons"),
+            })
+            .optional(),
           conversation_recording: z
             .object({
               enabled: z.boolean().optional().describe("Enable conversation content recording (default: true)"),
