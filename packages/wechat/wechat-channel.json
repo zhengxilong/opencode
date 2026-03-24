@@ -1,0 +1,20 @@
+{
+  "wechat_channel": {
+    "enabled": true,
+    "default_project_dir": "/Users/stevenzheng/ai_projects/opencode-joinAI/opencode-joinAI-integration/test_files/opencode-wechat-test-project",
+    "allowed_projects": [
+      "/Users/stevenzheng/ai_projects/opencode-joinAI/opencode-joinAI-integration/test_files/opencode-wechat-test-project"
+    ],
+    "session_timeout_minutes": 120,
+    "max_reply_length": 2000,
+    "status_update_threshold_seconds": 10,
+    "metrics_enabled": true,
+    "management_api_base_url": "http://127.0.0.1:3001",
+    "require_confirmation_for": [
+      "git_push",
+      "rm",
+      "bulk_edit",
+      "exec_dangerous_command"
+    ]
+  }
+}
